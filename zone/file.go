@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"time"
 
 	"github.com/miekg/dns"
 )
@@ -34,10 +33,35 @@ func writeVarString(data []byte, offset int, str string) int {
 	return offset + len(str)
 }
 
+func (storage *FileStorage) ListZones(ctx context.Context) ([]string, error) {
+	files, err := os.ReadDir(storage.Path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list zones: %v", err)
+	}
+	zones := make([]string, 0)
+	for _, file := range files {
+		if file.IsDir() {
+			continue
+		}
+		zones = append(zones, file.Name())
+	}
+	return zones, nil
+}
+
+func (storage *FileStorage) AddZone(ctx context.Context, zoneId string) error {
+	_, err := os.Create(storage.Path + "/" + zoneId)
+	return fmt.Errorf("failed to create zone: %v", err)
+}
+
+func (storage *FileStorage) DeleteZone(ctx context.Context, zoneId string) error {
+	err := os.Remove(storage.Path + "/" + zoneId)
+	return fmt.Errorf("failed to delete zone: %v", err)
+}
+
 func (storage *FileStorage) Load(ctx context.Context, zoneId string) (Zone, error) {
 	data, err := os.ReadFile(storage.Path + "/" + zoneId)
 	if err != nil {
-		return Zone{}, fmt.Errorf("failed to read zone data file: %v", err)
+		return Zone{}, fmt.Errorf("failed to load zone data: %v", err)
 	}
 
 	// Read records - not delimiters needed, UnpackRR will tell us new offset
@@ -57,15 +81,13 @@ func (storage *FileStorage) Load(ctx context.Context, zoneId string) (Zone, erro
 	}
 
 	return Zone{
-		Id:      zoneId,
+		Name:    zoneId,
 		Records: records,
 	}, nil
 }
 
-func (storage *FileStorage) LastUpdated(ctx context.Context, zoneId string) (time.Time, error) {
-	// Never try to update in-memory zone data from here
-	// File storage is meant to serve as backup against etcd failures
-	return time.Unix(0, 0), nil
+func (storage *FileStorage) IsCurrent(ctx context.Context, zone *Zone) (bool, error) {
+	return true, nil // Not supported for file backend
 }
 
 func (storage *FileStorage) Patch(ctx context.Context, zoneId string, record DnsRecord) error {

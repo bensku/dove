@@ -1,11 +1,7 @@
 package zone
 
-import (
-	"time"
-)
-
 type Zone struct {
-	Id          string
+	Name        string
 	Records     []DnsRecord
-	LastUpdated time.Time
+	UpdatedHash string
 }

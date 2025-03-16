@@ -23,6 +23,7 @@ require (
 )
 
 require (
+	github.com/google/uuid v1.6.0
 	go.etcd.io/etcd/client/v3 v3.5.19
 	golang.org/x/mod v0.18.0 // indirect
 	golang.org/x/net v0.36.0 // indirect

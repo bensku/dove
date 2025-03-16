@@ -8,69 +8,125 @@ import (
 )
 
 type ZoneServer struct {
-	ZoneIds []string
 	context context.Context
 
 	primary  ZoneStorage
 	fallback ZoneStorage
 
-	ZoneLock sync.RWMutex
-	Zones    map[string]Zone
+	ZoneLock      sync.RWMutex
+	ZoneIds       []string
+	Zones         map[string]*Zone
+	onZoneUpdated func(name string, zone *Zone)
 
 	refreshTicker *time.Ticker
 }
 
-func (server *ZoneServer) loadZones(fallback bool) error {
-	ctx, cancelFunc := context.WithTimeout(server.context, 10*time.Second)
+func (s *ZoneServer) FindZone(query string) *Zone {
+	// Find the most specific zone that matches this query
+	zoneName := ""
+	bestMatch := ""
+
+	s.ZoneLock.RLock()
+	defer s.ZoneLock.RUnlock()
+	for id := range s.Zones {
+		// Keep track of the longest (most specific) match
+		if len(id) > len(bestMatch) {
+			bestMatch = id
+			zoneName = id
+		}
+	}
+	if zoneName == "" {
+		return nil
+	}
+	return s.Zones[zoneName]
+}
+
+func (s *ZoneServer) loadZones(fallback bool) error {
+	ctx, cancelFunc := context.WithTimeout(s.context, 10*time.Second)
 	defer cancelFunc()
 
 	var storage ZoneStorage
 	if fallback {
-		storage = server.fallback
+		storage = s.fallback
 	} else {
-		storage = server.primary
+		storage = s.primary
 	}
-	for _, zoneId := range server.ZoneIds {
-		updatedAt, err := storage.LastUpdated(ctx, zoneId)
+
+	// Load zone ids
+	zoneIds, err := storage.ListZones(ctx)
+	if err != nil {
+		return err
+	}
+	s.ZoneLock.Lock()
+	oldZoneIds := s.Zones
+	s.ZoneIds = zoneIds
+	s.ZoneLock.Unlock()
+
+	// Update the loaded zones
+	for _, zoneId := range s.ZoneIds {
+		current, err := storage.IsCurrent(ctx, s.Zones[zoneId])
 		if err != nil {
 			return err
 		}
-		if updatedAt.Compare(server.Zones[zoneId].LastUpdated) > 0 {
+		if !current {
 			// Newer zone available
-			server.ZoneLock.Lock()
-			server.Zones[zoneId], err = storage.Load(ctx, zoneId)
+			s.ZoneLock.Lock()
+			zone, err := storage.Load(ctx, zoneId)
 			if err != nil {
-				server.ZoneLock.Unlock()
+				s.ZoneLock.Unlock()
 				return err
 			}
-			server.ZoneLock.Unlock()
-			slog.Info("loaded zone", "zoneId", zoneId, "updatedAt", updatedAt)
+			s.Zones[zoneId] = &zone
+
+			// Notify listener
+			if s.onZoneUpdated != nil {
+				s.onZoneUpdated(zoneId, s.Zones[zoneId])
+			}
+
+			s.ZoneLock.Unlock()
+			slog.Info("loaded zone", "zoneId", zoneId)
 		}
 	}
+
+	// Check if we removed any zones and call listener for them
+	s.ZoneLock.Lock()
+	for zoneId := range oldZoneIds {
+		if _, ok := s.Zones[zoneId]; !ok {
+			if s.onZoneUpdated != nil {
+				s.onZoneUpdated(zoneId, nil)
+			}
+		}
+	}
+	s.ZoneLock.Unlock()
+
 	return nil
 }
 
-func (server *ZoneServer) zoneRefresher() {
+func (s *ZoneServer) zoneRefresher() {
 	for {
 		select {
-		case <-server.refreshTicker.C:
-			err := server.loadZones(false)
+		case <-s.refreshTicker.C:
+			err := s.loadZones(false)
 			if err != nil {
 				slog.Error("failed to refresh zones from primary, serving stale data!", "error", err)
 			}
-		case <-server.context.Done():
+		case <-s.context.Done():
 			return
 		}
 	}
 }
 
-func NewZoneServer(ctx context.Context, zoneIds []string, primary ZoneStorage, fallback ZoneStorage) *ZoneServer {
+func (s *ZoneServer) Close() {
+	s.refreshTicker.Stop()
+}
+
+func NewZoneServer(ctx context.Context, primary ZoneStorage, fallback ZoneStorage) *ZoneServer {
 	server := &ZoneServer{
-		ZoneIds:       zoneIds,
+		ZoneIds:       make([]string, 0),
 		context:       ctx,
 		primary:       primary,
 		fallback:      fallback,
-		Zones:         make(map[string]Zone),
+		Zones:         make(map[string]*Zone),
 		refreshTicker: time.NewTicker(5 * time.Second),
 	}
 

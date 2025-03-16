@@ -18,19 +18,10 @@ func TestEtcdStorage(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	server := zone.NewEtcdStorage(client, "testZones/")
-
-	// Empty zone, lastUpdated
-	time, err := server.LastUpdated(ctx, "test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if time.Unix() != 0 {
-		t.Fatal("nothing saved yet, lastUpdated should be Unix epoch")
-	}
+	storage := zone.NewEtcdStorage(client, "testZones/")
 
 	// // Empty zone load
-	testZone, err := server.Load(ctx, "test")
+	testZone, err := storage.Load(ctx, "test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,13 +35,20 @@ func TestEtcdStorage(t *testing.T) {
 		Id:     "record",
 		Record: rr1,
 	}
-	err = server.Patch(ctx, "test", apex)
+	err = storage.Patch(ctx, "test", apex)
 	if err != nil {
 		t.Fatal(err)
 	}
-	testZone, err = server.Load(ctx, "test")
+	testZone, err = storage.Load(ctx, "test")
 	if err != nil {
 		t.Fatal(err)
+	}
+	current, err := storage.IsCurrent(ctx, &testZone)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !current {
+		t.Fatal("zone should be current")
 	}
 	if len(testZone.Records) != 1 {
 		t.Fatal("wrong amount of records", testZone.Records)
@@ -68,14 +66,31 @@ func TestEtcdStorage(t *testing.T) {
 		Id:     "record",
 		Record: rr2,
 	}
-	err = server.Patch(ctx, "test", record2)
+	err = storage.Patch(ctx, "test", record2)
 	if err != nil {
 		t.Fatal(err)
 	}
-	testZone, err = server.Load(ctx, "test")
+
+	current, err = storage.IsCurrent(ctx, &testZone)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if current {
+		t.Fatal("zone should be outdated")
+	}
+
+	testZone, err = storage.Load(ctx, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err = storage.IsCurrent(ctx, &testZone)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !current {
+		t.Fatal("zone should be current")
+	}
+
 	if len(testZone.Records) != 1 {
 		t.Fatal("added new record, should've overwritten", testZone.Records)
 	}
@@ -87,11 +102,11 @@ func TestEtcdStorage(t *testing.T) {
 	}
 
 	// Deleting records
-	err = server.Delete(ctx, "test", "record")
+	err = storage.Delete(ctx, "test", "record")
 	if err != nil {
 		t.Fatal(err)
 	}
-	testZone, err = server.Load(ctx, "test")
+	testZone, err = storage.Load(ctx, "test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,23 +115,64 @@ func TestEtcdStorage(t *testing.T) {
 	}
 
 	// Clearing (deleting all) records AND lastUpdated
-	err = server.Clear(ctx, "test")
+	err = storage.Clear(ctx, "test")
 	if err != nil {
 		t.Fatal(err)
 	}
-	testZone, err = server.Load(ctx, "test")
+	testZone, err = storage.Load(ctx, "test")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(testZone.Records) != 0 {
 		t.Fatal("records were not cleared", testZone.Records)
 	}
+}
 
-	time, err = server.LastUpdated(ctx, "test")
+func TestEtcdZoneList(t *testing.T) {
+	client, err := clientv3.New(clientv3.Config{
+		Endpoints: []string{"http://localhost:2379", "http://localhost:22379", "http://localhost:32379"},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if time.Unix() != 0 {
-		t.Fatal("lastUpdated was not cleared")
+
+	ctx := context.Background()
+	storage := zone.NewEtcdStorage(client, "testZones/")
+
+	zoneIds, err := storage.ListZones(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(zoneIds) != 0 {
+		t.Fatal("no zones expected")
+	}
+
+	// Adding zones!
+	err = storage.AddZone(ctx, "test.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	zoneIds, err = storage.ListZones(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(zoneIds) != 1 {
+		t.Fatal("wrong amount of zones", zoneIds)
+	}
+	if zoneIds[0] != "test." {
+		t.Fatal("zone id corrupted", zoneIds[0])
+	}
+
+	// Deleting zones!
+	err = storage.DeleteZone(ctx, "test.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	zoneIds, err = storage.ListZones(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(zoneIds) != 0 {
+		t.Fatal("zone was not deleted", zoneIds)
 	}
 }

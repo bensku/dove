@@ -3,10 +3,9 @@ package zone
 import (
 	"bytes"
 	"context"
-	"encoding/binary"
 	"fmt"
-	"time"
 
+	"github.com/google/uuid"
 	"github.com/miekg/dns"
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
@@ -27,6 +26,35 @@ func (storage *EtcdStorage) etcdPrefix(zoneId string) string {
 	return storage.prefix + zoneId + "/"
 }
 
+func (storage *EtcdStorage) ListZones(ctx context.Context) ([]string, error) {
+	prefix := storage.prefix + "__zones/"
+	resp, err := storage.client.KV.Get(ctx, prefix, clientv3.WithPrefix())
+	if err != nil {
+		return nil, fmt.Errorf("failed to list zones: %v", err)
+	}
+	zones := make([]string, 0)
+	for _, kv := range resp.Kvs {
+		zones = append(zones, string(kv.Key[len(prefix):]))
+	}
+	return zones, nil
+}
+
+func (storage *EtcdStorage) AddZone(ctx context.Context, zoneId string) error {
+	_, err := storage.client.KV.Put(ctx, storage.prefix+"__zones/"+zoneId, "true")
+	if err != nil {
+		return fmt.Errorf("failed to add zone: %v", err)
+	}
+	return nil
+}
+
+func (storage *EtcdStorage) DeleteZone(ctx context.Context, zoneId string) error {
+	_, err := storage.client.KV.Delete(ctx, storage.prefix+"__zones/"+zoneId)
+	if err != nil {
+		return fmt.Errorf("failed to delete zone: %v", err)
+	}
+	return nil
+}
+
 func (storage *EtcdStorage) Load(ctx context.Context, zoneId string) (Zone, error) {
 	prefix := storage.etcdPrefix(zoneId)
 	resp, err := storage.client.KV.Get(ctx, prefix, clientv3.WithPrefix())
@@ -36,11 +64,11 @@ func (storage *EtcdStorage) Load(ctx context.Context, zoneId string) (Zone, erro
 
 	// Load entire zone from etcd as binary data
 	records := make([]DnsRecord, 0)
-	updatedKey := []byte(prefix + "__lastUpdated")
-	lastUpdated := time.Unix(0, 0)
+	updatedKey := []byte(prefix + "__updatedHash")
+	updatedHash := ""
 	for _, kv := range resp.Kvs {
 		if bytes.Equal(kv.Key, updatedKey) {
-			lastUpdated = time.Unix(int64(binary.LittleEndian.Uint64(kv.Value)), 0)
+			updatedHash = string(kv.Value)
 			continue
 		}
 
@@ -54,21 +82,21 @@ func (storage *EtcdStorage) Load(ctx context.Context, zoneId string) (Zone, erro
 	}
 
 	return Zone{
-		Id:          zoneId,
+		Name:        zoneId,
 		Records:     records,
-		LastUpdated: lastUpdated,
+		UpdatedHash: updatedHash,
 	}, nil
 }
 
-func (storage *EtcdStorage) LastUpdated(ctx context.Context, zoneId string) (time.Time, error) {
-	resp, err := storage.client.KV.Get(ctx, storage.etcdPrefix(zoneId)+"__lastUpdated")
+func (storage *EtcdStorage) IsCurrent(ctx context.Context, zone *Zone) (bool, error) {
+	resp, err := storage.client.KV.Get(ctx, storage.etcdPrefix(zone.Name)+"__updatedHash")
 	if err != nil {
-		return time.Unix(0, 0), fmt.Errorf("failed to lookup lastUpdated: %v", err)
+		return false, fmt.Errorf("failed to lookup updatedHash: %v", err)
 	}
 	if len(resp.Kvs) == 0 {
-		return time.Unix(0, 0), nil
+		return false, nil
 	}
-	return time.Unix(int64(binary.LittleEndian.Uint64(resp.Kvs[0].Value)), 0), nil
+	return string(resp.Kvs[0].Value) == zone.UpdatedHash, nil
 }
 
 func (storage *EtcdStorage) Patch(ctx context.Context, zoneId string, record DnsRecord) error {
@@ -78,12 +106,11 @@ func (storage *EtcdStorage) Patch(ctx context.Context, zoneId string, record Dns
 		return fmt.Errorf("failed to pack DNS record: %v", err)
 	}
 
-	lastUpdated := make([]byte, 8)
-	binary.LittleEndian.PutUint64(lastUpdated, uint64(time.Now().Unix()))
+	updatedHash := uuid.New().String()
 	prefix := storage.etcdPrefix(zoneId)
 	txn := storage.client.KV.Txn(ctx).Then(
 		clientv3.OpPut(prefix+record.Id, string(data[:end])),
-		clientv3.OpPut(prefix+"__lastUpdated", string(lastUpdated)),
+		clientv3.OpPut(prefix+"__updatedHash", updatedHash),
 	)
 	_, err = txn.Commit()
 	if err != nil {
