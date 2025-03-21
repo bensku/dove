@@ -21,26 +21,6 @@ type ZoneServer struct {
 	refreshTicker *time.Ticker
 }
 
-func (s *ZoneServer) FindZone(query string) *Zone {
-	// Find the most specific zone that matches this query
-	zoneName := ""
-	bestMatch := ""
-
-	s.ZoneLock.RLock()
-	defer s.ZoneLock.RUnlock()
-	for id := range s.Zones {
-		// Keep track of the longest (most specific) match
-		if len(id) > len(bestMatch) {
-			bestMatch = id
-			zoneName = id
-		}
-	}
-	if zoneName == "" {
-		return nil
-	}
-	return s.Zones[zoneName]
-}
-
 func (s *ZoneServer) loadZones(fallback bool) error {
 	ctx, cancelFunc := context.WithTimeout(s.context, 10*time.Second)
 	defer cancelFunc()
@@ -120,13 +100,15 @@ func (s *ZoneServer) Close() {
 	s.refreshTicker.Stop()
 }
 
-func NewZoneServer(ctx context.Context, primary ZoneStorage, fallback ZoneStorage) *ZoneServer {
+func NewZoneServer(ctx context.Context, primary ZoneStorage, fallback ZoneStorage,
+	onZoneUpdated func(name string, zone *Zone)) *ZoneServer {
 	server := &ZoneServer{
 		ZoneIds:       make([]string, 0),
 		context:       ctx,
 		primary:       primary,
 		fallback:      fallback,
 		Zones:         make(map[string]*Zone),
+		onZoneUpdated: onZoneUpdated,
 		refreshTicker: time.NewTicker(5 * time.Second),
 	}
 

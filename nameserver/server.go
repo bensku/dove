@@ -1,6 +1,7 @@
 package nameserver
 
 import (
+	"context"
 	"strings"
 
 	"github.com/bensku/dove/zone"
@@ -8,27 +9,20 @@ import (
 )
 
 type Server struct {
-	zones   zone.ZoneServer
-	handler *dns.Server
+	zones zone.ZoneServer
+	dns   *dns.Server
 }
 
 func (s *Server) Close() {
-	s.handler.Shutdown()
+	s.dns.Shutdown()
 }
 
-func (s *Server) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
+func handleRequest(zone *zone.Zone, w dns.ResponseWriter, r *dns.Msg) {
 	m := new(dns.Msg)
 	m.SetReply(r)
 	m.Authoritative = true
 
-	missingZones := false
 	for _, q := range r.Question {
-		zone := s.zones.FindZone(q.Name)
-		if zone == nil {
-			missingZones = true // So that we know to return NXDOMAIN
-			continue            // No matching zone
-		}
-
 		for _, record := range zone.Records {
 			recordName := record.Record.Header().Name
 
@@ -59,20 +53,37 @@ func (s *Server) handleRequest(w dns.ResponseWriter, r *dns.Msg) {
 		}
 	}
 
-	// If we have nothing to return AND at least one of zones is unknown to us -> NXDOMAIN
-	if missingZones && len(m.Answer) == 0 {
-		m.Rcode = dns.RcodeNameError
-	}
-
 	w.WriteMsg(m)
 }
 
-func New(listenAddr string) *Server {
-	server := Server{
-		handler: &dns.Server{Addr: listenAddr, Net: "udp"},
+func New(ctx context.Context, listenAddr string, primary zone.ZoneStorage, secondary zone.ZoneStorage) *Server {
+	handler := dns.NewServeMux()
+
+	onZoneUpdated := func(name string, zone *zone.Zone) {
+		if zone == nil {
+			// Previously existing zone was removed, clear handler
+			handler.HandleRemove(name)
+		} else {
+			// New zone was loaded or existing zone was updated (=replaced)
+			handler.HandleRemove(name) // Remove old handler (no-op if it doesn't exist)
+			handler.HandleFunc(name, func(w dns.ResponseWriter, m *dns.Msg) {
+				handleRequest(zone, w, m)
+			})
+		}
 	}
 
-	go server.handler.ListenAndServe()
+	server := Server{
+		zones: *zone.NewZoneServer(ctx, primary, secondary, onZoneUpdated),
+		dns:   &dns.Server{Addr: listenAddr, Net: "udp", Handler: handler},
+	}
+
+	// Shutdown the DNS server when context is done
+	go func() {
+		<-ctx.Done()
+		server.dns.Shutdown()
+	}()
+
+	go server.dns.ListenAndServe()
 
 	return &server
 }
