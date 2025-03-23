@@ -44,6 +44,9 @@ func (s *ZoneServer) loadZones(fallback bool) error {
 
 	// Update the loaded zones
 	for _, zoneId := range s.ZoneIds {
+		if zoneId == "" {
+			continue // TODO remove
+		}
 		current, err := storage.IsCurrent(ctx, s.Zones[zoneId])
 		if err != nil {
 			return err
@@ -62,6 +65,9 @@ func (s *ZoneServer) loadZones(fallback bool) error {
 			if s.onZoneUpdated != nil {
 				s.onZoneUpdated(zoneId, s.Zones[zoneId])
 			}
+
+			// Transfer to local storage in case we lose etcd
+			InternalTransfer(ctx, zone, s.fallback)
 
 			s.ZoneLock.Unlock()
 			slog.Info("loaded zone", "zoneId", zoneId)

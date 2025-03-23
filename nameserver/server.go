@@ -13,10 +13,6 @@ type Server struct {
 	dns   *dns.Server
 }
 
-func (s *Server) Close() {
-	s.dns.Shutdown()
-}
-
 func handleRequest(zone *zone.Zone, w dns.ResponseWriter, r *dns.Msg) {
 	m := new(dns.Msg)
 	m.SetReply(r)
@@ -56,7 +52,7 @@ func handleRequest(zone *zone.Zone, w dns.ResponseWriter, r *dns.Msg) {
 	w.WriteMsg(m)
 }
 
-func New(ctx context.Context, listenAddr string, primary zone.ZoneStorage, secondary zone.ZoneStorage) *Server {
+func New(ctx context.Context, listenAddr string, primary zone.ZoneStorage, fallback zone.ZoneStorage) *Server {
 	handler := dns.NewServeMux()
 
 	onZoneUpdated := func(name string, zone *zone.Zone) {
@@ -73,7 +69,7 @@ func New(ctx context.Context, listenAddr string, primary zone.ZoneStorage, secon
 	}
 
 	server := Server{
-		zones: *zone.NewZoneServer(ctx, primary, secondary, onZoneUpdated),
+		zones: *zone.NewZoneServer(ctx, primary, fallback, onZoneUpdated),
 		dns:   &dns.Server{Addr: listenAddr, Net: "udp", Handler: handler},
 	}
 

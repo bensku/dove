@@ -23,11 +23,7 @@ func (auth *authMiddleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing API key", http.StatusUnauthorized)
 		return
 	}
-	if len(header) < 9 {
-		http.Error(w, "malformed Authorization header", http.StatusBadRequest)
-		return
-	}
-	key := header[7:]
+	key := header
 	if !slices.Contains(auth.acceptedKeys, key) {
 		http.Error(w, "invalid API key", http.StatusForbidden)
 		return

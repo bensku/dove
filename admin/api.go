@@ -45,18 +45,18 @@ func New(ctx context.Context, addr string,
 
 	// Zone manipulation
 	mux.HandleFunc("PUT /api/v1/zone/{zone}", func(w http.ResponseWriter, r *http.Request) {
-		name := r.URL.Query().Get("zone")
+		name := r.PathValue("zone")
 		storage.AddZone(r.Context(), name)
 	})
 	mux.HandleFunc("DELETE /api/v1/zone/{zone}", func(w http.ResponseWriter, r *http.Request) {
-		name := r.URL.Query().Get("zone")
+		name := r.PathValue("zone")
 		storage.DeleteZone(r.Context(), name)
 	})
 
 	// DNS record manipulation
 	mux.HandleFunc("PUT /api/v1/zone/{zone}/{record}", func(w http.ResponseWriter, r *http.Request) {
-		zoneId := r.URL.Query().Get("zone")
-		recordId := r.URL.Query().Get("record")
+		zoneId := r.PathValue("zone")
+		recordId := r.PathValue("record")
 
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
@@ -77,8 +77,8 @@ func New(ctx context.Context, addr string,
 		})
 	})
 	mux.HandleFunc("DELETE /api/v1/zone/{zone}/{record}", func(w http.ResponseWriter, r *http.Request) {
-		zoneId := r.URL.Query().Get("zone")
-		recordId := r.URL.Query().Get("record")
+		zoneId := r.PathValue("zone")
+		recordId := r.PathValue("record")
 
 		storage.Delete(r.Context(), zoneId, recordId)
 	})
@@ -88,7 +88,7 @@ func New(ctx context.Context, addr string,
 		// TODO actually health check the storage?
 	})
 	mux.HandleFunc("POST /api/v1/zone/{zone}/acme/update", func(w http.ResponseWriter, r *http.Request) {
-		zoneId := r.URL.Query().Get("zone")
+		zoneId := r.PathValue("zone")
 
 		body, err := io.ReadAll(r.Body)
 		if err != nil {

@@ -89,12 +89,15 @@ func (storage *EtcdStorage) Load(ctx context.Context, zoneId string) (Zone, erro
 }
 
 func (storage *EtcdStorage) IsCurrent(ctx context.Context, zone *Zone) (bool, error) {
+	if zone == nil {
+		return false, nil // The zone is in fact not loaded at all!
+	}
 	resp, err := storage.client.KV.Get(ctx, storage.etcdPrefix(zone.Name)+"__updatedHash")
 	if err != nil {
 		return false, fmt.Errorf("failed to lookup updatedHash: %v", err)
 	}
 	if len(resp.Kvs) == 0 {
-		return false, nil
+		return true, nil // Zone has never had records -> current
 	}
 	return string(resp.Kvs[0].Value) == zone.UpdatedHash, nil
 }
