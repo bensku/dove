@@ -21,12 +21,18 @@ func main() {
 	etcdPrefix := flag.String("etcd-prefix", "/dove/zones", "Etcd prefix for zone data")
 	localData := flag.String("fallback-dir", "/tmp/dove/zones", "Local path for fallback zone data")
 	apiKeys := flag.String("accept-keys", "", "Comma-separated list of accepted API keys for admin API")
+	logLevel := flag.String("log-level", "INFO", "Log level")
 	flag.Parse()
 
 	if *etcdEndpoints == "" {
 		slog.Error("--etcd-endpoints is required")
 		return
 	}
+
+	// Setup logging
+	var programLevel = new(slog.LevelVar)
+	programLevel.UnmarshalText([]byte(*logLevel))
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: programLevel})))
 
 	ctx, cancelFunc := context.WithCancel(context.Background())
 

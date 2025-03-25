@@ -2,6 +2,7 @@ package nameserver
 
 import (
 	"context"
+	"log/slog"
 	"strings"
 
 	"github.com/bensku/dove/zone"
@@ -19,19 +20,29 @@ func handleRequest(zone *zone.Zone, w dns.ResponseWriter, r *dns.Msg) {
 	m.Authoritative = true
 
 	for _, q := range r.Question {
+		name := strings.TrimSuffix(q.Name, zone.Name)
+		if name == "" {
+			name = "."
+		}
+		slog.Debug("incoming query", "query", name, "type", dns.TypeToString[q.Qtype])
 		for _, record := range zone.Records {
+			slog.Debug("matching record", "name", record.Record.Header().Name, "type", dns.TypeToString[record.Record.Header().Rrtype])
 			recordName := record.Record.Header().Name
 
 			// Direct match
-			if recordName == q.Name {
+			if recordName == name {
 				if q.Qtype == dns.TypeANY || record.Record.Header().Rrtype == q.Qtype {
-					m.Answer = append(m.Answer, record.Record)
+					// Create a new record with the queried name
+					newRecord := dns.Copy(record.Record)
+					newRecord.Header().Name = q.Name
+					m.Answer = append(m.Answer, newRecord)
 					continue
 				}
 			}
 
 			// Wildcard match
 			// Check if this is a wildcard record (starts with "*.")
+			// TODO untested!
 			if strings.HasPrefix(recordName, "*.") {
 				// Remove "*." and check if query ends with this suffix
 				wildcardSuffix := recordName[2:]
@@ -79,7 +90,12 @@ func New(ctx context.Context, listenAddr string, primary zone.ZoneStorage, fallb
 		server.dns.Shutdown()
 	}()
 
-	go server.dns.ListenAndServe()
+	go func() {
+		err := server.dns.ListenAndServe()
+		if err != nil {
+			slog.Error("DNS server failed to start", "error", err)
+		}
+	}()
 
 	return &server
 }

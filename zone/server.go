@@ -3,7 +3,7 @@ package zone
 import (
 	"context"
 	"log/slog"
-	"sync"
+	"slices"
 	"time"
 )
 
@@ -13,7 +13,6 @@ type ZoneServer struct {
 	primary  ZoneStorage
 	fallback ZoneStorage
 
-	ZoneLock      sync.RWMutex
 	ZoneIds       []string
 	Zones         map[string]*Zone
 	onZoneUpdated func(name string, zone *Zone)
@@ -37,26 +36,19 @@ func (s *ZoneServer) loadZones(fallback bool) error {
 	if err != nil {
 		return err
 	}
-	s.ZoneLock.Lock()
-	oldZoneIds := s.Zones
+	oldZoneIds := s.ZoneIds
 	s.ZoneIds = zoneIds
-	s.ZoneLock.Unlock()
 
 	// Update the loaded zones
 	for _, zoneId := range s.ZoneIds {
-		if zoneId == "" {
-			continue // TODO remove
-		}
 		current, err := storage.IsCurrent(ctx, s.Zones[zoneId])
 		if err != nil {
 			return err
 		}
 		if !current {
 			// Newer zone available
-			s.ZoneLock.Lock()
 			zone, err := storage.Load(ctx, zoneId)
 			if err != nil {
-				s.ZoneLock.Unlock()
 				return err
 			}
 			s.Zones[zoneId] = &zone
@@ -69,21 +61,21 @@ func (s *ZoneServer) loadZones(fallback bool) error {
 			// Transfer to local storage in case we lose etcd
 			InternalTransfer(ctx, zone, s.fallback)
 
-			s.ZoneLock.Unlock()
 			slog.Info("loaded zone", "zoneId", zoneId)
 		}
+		slog.Debug("checked zone for update", "zoneId", zoneId, "updated", !current)
 	}
 
 	// Check if we removed any zones and call listener for them
-	s.ZoneLock.Lock()
-	for zoneId := range oldZoneIds {
-		if _, ok := s.Zones[zoneId]; !ok {
+	for _, zoneId := range oldZoneIds {
+		if !slices.Contains(zoneIds, zoneId) {
 			if s.onZoneUpdated != nil {
+				delete(s.Zones, zoneId)
 				s.onZoneUpdated(zoneId, nil)
+				slog.Info("unloaded zone", "zoneId", zoneId)
 			}
 		}
 	}
-	s.ZoneLock.Unlock()
 
 	return nil
 }

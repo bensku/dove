@@ -50,7 +50,8 @@ func New(ctx context.Context, addr string,
 	})
 	mux.HandleFunc("DELETE /api/v1/zone/{zone}", func(w http.ResponseWriter, r *http.Request) {
 		name := r.PathValue("zone")
-		storage.DeleteZone(r.Context(), name)
+		storage.Clear(r.Context(), name)      // Clear zone content
+		storage.DeleteZone(r.Context(), name) // Delete zone for good
 	})
 
 	// DNS record manipulation
@@ -71,10 +72,15 @@ func New(ctx context.Context, addr string,
 			return
 		}
 
-		storage.Patch(r.Context(), zoneId, zone.DnsRecord{
+		err = storage.Patch(r.Context(), zoneId, zone.DnsRecord{
 			Id:     recordId,
 			Record: record,
 		})
+		if err != nil {
+			slog.Error("failed to patch record: %v", "error", err)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 	})
 	mux.HandleFunc("DELETE /api/v1/zone/{zone}/{record}", func(w http.ResponseWriter, r *http.Request) {
 		zoneId := r.PathValue("zone")
