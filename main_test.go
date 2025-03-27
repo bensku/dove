@@ -60,6 +60,22 @@ func queryRecords(domain string, recordType uint16) []dns.RR {
 	return r.Answer
 }
 
+func recordsEqual(rrs []dns.RR, expected []string) bool {
+	if len(rrs) != len(expected) {
+		return false
+	}
+	for i, expect := range expected {
+		expectedRr, err := dns.NewRR(expect)
+		if err != nil {
+			panic(err)
+		}
+		if fmt.Sprint(rrs[i]) != fmt.Sprint(expectedRr) {
+			return false
+		}
+	}
+	return true
+}
+
 func TestAdminApi(t *testing.T) {
 	zones := request("GET", "http://localhost:8080/api/v1/zone", nil)
 	if zones != "[]" {
@@ -72,7 +88,7 @@ func TestAdminApi(t *testing.T) {
 	if zones != `["dove.test."]` {
 		t.Errorf("expected dove.test., got %s", zones)
 	}
-	time.Sleep(7 * time.Second) // FIXME this ugly hack, but DNS needs time to propagate
+	time.Sleep(2 * time.Second)
 
 	// Check that the zone doesn't yet have any records
 	rr := queryRecords("dove.test.", dns.TypeA)
@@ -82,7 +98,7 @@ func TestAdminApi(t *testing.T) {
 
 	// Add some records
 	request("PUT", "http://localhost:8080/api/v1/zone/dove.test./testid", []byte("@ 300 IN A 1.2.3.4"))
-	time.Sleep(7 * time.Second) // FIXME this ugly hack, but DNS needs time to propagate
+	time.Sleep(2 * time.Second)
 	rr = queryRecords("dove.test.", dns.TypeA)
 	correct := []dns.RR{
 		&dns.A{
@@ -105,4 +121,62 @@ func TestAdminApi(t *testing.T) {
 	if zones != "[]" {
 		t.Errorf("zone was not properly deleted: %s", zones)
 	}
+}
+
+func TestRecords(t *testing.T) {
+	// Create zone
+	request("PUT", "http://localhost:8080/api/v1/zone/dove.test.", nil)
+	time.Sleep(2 * time.Second)
+
+	// Add some records
+	request("PUT", "http://localhost:8080/api/v1/zone/dove.test./test1", []byte("@ 300 IN A 1.2.3.4"))
+	request("PUT", "http://localhost:8080/api/v1/zone/dove.test./test2", []byte("foo 300 IN A 1.2.3.5"))
+	request("PUT", "http://localhost:8080/api/v1/zone/dove.test./test3", []byte("bar 300 IN A 1.2.3.6"))
+	request("PUT", "http://localhost:8080/api/v1/zone/dove.test./test4", []byte("* 299 IN A 1.2.3.7"))
+	request("PUT", "http://localhost:8080/api/v1/zone/dove.test./test5", []byte("ref 300 IN CNAME bar.dove.test."))
+	time.Sleep(2 * time.Second)
+
+	// Test that records, including falling back to wildcard, work
+	rr := queryRecords("dove.test.", dns.TypeA)
+	if !recordsEqual(rr, []string{"dove.test. 300 IN A 1.2.3.4"}) {
+		t.Errorf("incorrect root records: %s", rr)
+	}
+	// Same but without trailing dot
+	rr = queryRecords("dove.test", dns.TypeA)
+	if !recordsEqual(rr, []string{"dove.test 300 IN A 1.2.3.4"}) {
+		t.Errorf("incorrect root records without dot: %s", rr)
+	}
+
+	rr = queryRecords("foo.dove.test.", dns.TypeA)
+	if !recordsEqual(rr, []string{"foo.dove.test. 300 IN A 1.2.3.5"}) {
+		t.Errorf("incorrect subdomain 1 records: %s", rr)
+	}
+	rr = queryRecords("foo.dove.test", dns.TypeA)
+	if !recordsEqual(rr, []string{"foo.dove.test 300 IN A 1.2.3.5"}) {
+		t.Errorf("incorrect subdomain 1 records: %s", rr)
+	}
+
+	rr = queryRecords("bar.dove.test.", dns.TypeA)
+	if !recordsEqual(rr, []string{"bar.dove.test. 300 IN A 1.2.3.6"}) {
+		t.Errorf("incorrect subdomain 2 records: %s", rr)
+	}
+	rr = queryRecords("baz.dove.test.", dns.TypeA)
+	if !recordsEqual(rr, []string{"baz.dove.test. 299 IN A 1.2.3.7"}) {
+		t.Errorf("incorrect wildcard records: %s", rr)
+	}
+	rr = queryRecords("ref.dove.test.", dns.TypeCNAME)
+	if !recordsEqual(rr, []string{"ref.dove.test. 300 IN CNAME bar.dove.test."}) {
+		t.Errorf("incorrect CNAME information: %s", rr)
+	}
+
+	// Delete the root, should fall back to wildcard
+	request("DELETE", "http://localhost:8080/api/v1/zone/dove.test./test2", nil)
+	time.Sleep(2 * time.Second)
+	rr = queryRecords("foo.dove.test.", dns.TypeA)
+	if !recordsEqual(rr, []string{"foo.dove.test. 299 IN A 1.2.3.7"}) {
+		t.Errorf("foo.dove.test. did not fallback to wildcard: %s", rr)
+	}
+
+	// Delete the zone
+	request("DELETE", "http://localhost:8080/api/v1/zone/dove.test.", nil)
 }

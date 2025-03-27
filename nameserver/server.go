@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/bensku/dove/zone"
 	"github.com/miekg/dns"
@@ -25,6 +26,8 @@ func handleRequest(zone *zone.Zone, w dns.ResponseWriter, r *dns.Msg) {
 			name = "."
 		}
 		slog.Debug("incoming query", "query", name, "type", dns.TypeToString[q.Qtype])
+		// IMPORTANT! Order of records we get from storage may be random!
+		exactResults := false
 		for _, record := range zone.Records {
 			slog.Debug("matching record", "name", record.Record.Header().Name, "type", dns.TypeToString[record.Record.Header().Rrtype])
 			recordName := record.Record.Header().Name
@@ -36,24 +39,33 @@ func handleRequest(zone *zone.Zone, w dns.ResponseWriter, r *dns.Msg) {
 					newRecord := dns.Copy(record.Record)
 					newRecord.Header().Name = q.Name
 					m.Answer = append(m.Answer, newRecord)
+					exactResults = true
 					continue
 				}
 			}
+		}
+		if exactResults {
+			continue // Skip wildcard matching
+		}
 
-			// Wildcard match
-			// Check if this is a wildcard record (starts with "*.")
-			// TODO untested!
-			if strings.HasPrefix(recordName, "*.") {
-				// Remove "*." and check if query ends with this suffix
-				wildcardSuffix := recordName[2:]
-				if strings.HasSuffix(q.Name, wildcardSuffix) &&
-					!strings.Contains(q.Name[:len(q.Name)-len(wildcardSuffix)], ".") {
-					// Create a new record with the queried name
-					newRecord := dns.Copy(record.Record)
-					newRecord.Header().Name = q.Name
+		// If no results, try wildcard matching
+		for _, record := range zone.Records {
+			recordName := record.Record.Header().Name
+			if recordName[0] == '*' {
+				var wildcardSuffix string
+				if recordName[1] == '.' {
+					wildcardSuffix = recordName[2:]
+				} else {
+					wildcardSuffix = recordName[1:]
+				}
 
+				if strings.HasSuffix(name, wildcardSuffix) {
 					if q.Qtype == dns.TypeANY || record.Record.Header().Rrtype == q.Qtype {
+						// Create a new record with the queried name
+						newRecord := dns.Copy(record.Record)
+						newRecord.Header().Name = q.Name
 						m.Answer = append(m.Answer, newRecord)
+						break // Do not allow many wildcards!
 					}
 				}
 			}
@@ -63,7 +75,7 @@ func handleRequest(zone *zone.Zone, w dns.ResponseWriter, r *dns.Msg) {
 	w.WriteMsg(m)
 }
 
-func New(ctx context.Context, listenAddr string, primary zone.ZoneStorage, fallback zone.ZoneStorage) *Server {
+func New(ctx context.Context, listenAddr string, primary zone.ZoneStorage, fallback zone.ZoneStorage, refreshInterval time.Duration) *Server {
 	handler := dns.NewServeMux()
 
 	onZoneUpdated := func(name string, zone *zone.Zone) {
@@ -80,7 +92,7 @@ func New(ctx context.Context, listenAddr string, primary zone.ZoneStorage, fallb
 	}
 
 	server := Server{
-		zones: *zone.NewZoneServer(ctx, primary, fallback, onZoneUpdated),
+		zones: *zone.NewZoneServer(ctx, primary, fallback, onZoneUpdated, refreshInterval),
 		dns:   &dns.Server{Addr: listenAddr, Net: "udp", Handler: handler},
 	}
 

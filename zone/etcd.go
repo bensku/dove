@@ -131,7 +131,15 @@ func (storage *EtcdStorage) Patch(ctx context.Context, zoneId string, record Dns
 
 func (storage *EtcdStorage) Delete(ctx context.Context, zoneId string, id string) error {
 	slog.Debug("deleting record", "zone", zoneId, "id", id)
-	_, err := storage.client.KV.Delete(ctx, storage.etcdPrefix(zoneId)+id)
+
+	// Remember to also mark zone as updated
+	updatedHash := uuid.New().String()
+	prefix := storage.etcdPrefix(zoneId)
+	txn := storage.client.KV.Txn(ctx).Then(
+		clientv3.OpDelete(prefix+id),
+		clientv3.OpPut(prefix+"__updatedHash", updatedHash),
+	)
+	_, err := txn.Commit()
 	if err != nil {
 		return fmt.Errorf("failed to delete record: %v", err)
 	}

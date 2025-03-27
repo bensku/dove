@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"time"
 
 	"github.com/bensku/dove/admin"
 	"github.com/bensku/dove/nameserver"
@@ -19,7 +20,8 @@ func main() {
 	dnsListen := flag.String("dns-addr", ":53", "Listen address for DNS server")
 	etcdEndpoints := flag.String("etcd-endpoints", "", "Comma-separated list of etcd endpoints")
 	etcdPrefix := flag.String("etcd-prefix", "/dove/zones", "Etcd prefix for zone data")
-	localData := flag.String("fallback-dir", "/tmp/dove/zones", "Local path for fallback zone data")
+	localData := flag.String("fallback-dir", "/tmp/dove/zones", "Local path for fallback zone data, to be used if etcd is unavailable")
+	refreshInterval := flag.Int("refresh-interval", 5, "How often local zone data is refreshed from etcd (in seconds)")
 	apiKeys := flag.String("accept-keys", "", "Comma-separated list of accepted API keys for admin API")
 	logLevel := flag.String("log-level", "INFO", "Log level")
 	flag.Parse()
@@ -51,7 +53,7 @@ func main() {
 		return
 	}
 
-	nameserver.New(ctx, *dnsListen, primary, fallback)
+	nameserver.New(ctx, *dnsListen, primary, fallback, time.Duration(*refreshInterval)*time.Second)
 	admin.New(ctx, *httpListen, primary, strings.Split(*apiKeys, ","))
 
 	// Shutdown on SIGINT

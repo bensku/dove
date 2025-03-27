@@ -99,7 +99,7 @@ func (s *ZoneServer) Close() {
 }
 
 func NewZoneServer(ctx context.Context, primary ZoneStorage, fallback ZoneStorage,
-	onZoneUpdated func(name string, zone *Zone)) *ZoneServer {
+	onZoneUpdated func(name string, zone *Zone), refreshInterval time.Duration) *ZoneServer {
 	server := &ZoneServer{
 		ZoneIds:       make([]string, 0),
 		context:       ctx,
@@ -107,7 +107,7 @@ func NewZoneServer(ctx context.Context, primary ZoneStorage, fallback ZoneStorag
 		fallback:      fallback,
 		Zones:         make(map[string]*Zone),
 		onZoneUpdated: onZoneUpdated,
-		refreshTicker: time.NewTicker(5 * time.Second),
+		refreshTicker: time.NewTicker(refreshInterval),
 	}
 
 	// Initial zone load
